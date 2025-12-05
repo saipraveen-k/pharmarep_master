@@ -1,0 +1,16 @@
+body {
+  background-color: #f8f9fa;
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+.main {
+  background-color: #f8f9fa;
+}
+
+.block-container {
+  padding-top: 1.5rem;
+}
+
+h1, h2, h3 {
+  color: #1a6c80;
+}
