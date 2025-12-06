@@ -1,138 +1,85 @@
-import logging
-from typing import Dict, List
-from datetime import datetime
-
 from reportlab.lib.pagesizes import letter
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import inch
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, PageBreak
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
 from reportlab.lib import colors
+import logging
+import os
+from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
+def generate_report(query_id: str, query_text: str, candidates: list):
+    os.makedirs("./reports", exist_ok=True)
+    pdf_path = f"./reports/{query_id}.pdf"
 
-def generate_pdf_report(result: Dict, output_path: str):
-    doc = SimpleDocTemplate(output_path, pagesize=letter)
-    story: List = []
+    doc = SimpleDocTemplate(pdf_path, pagesize=letter)
+    story = []
     styles = getSampleStyleSheet()
 
     title_style = ParagraphStyle(
-        "Title",
+        "CustomTitle",
         parent=styles["Heading1"],
-        fontSize=22,
-        textColor=colors.HexColor("#1a6c80"),
-        alignment=1,
-        spaceAfter=18,
+        fontSize=24,
+        textColor=colors.HexColor("#1F2121"),
+        spaceAfter=30,
     )
-    header_style = ParagraphStyle(
-        "Header",
-        parent=styles["Heading2"],
-        fontSize=14,
-        textColor=colors.HexColor("#2b7a8f"),
-        spaceAfter=8,
-    )
-    normal = styles["Normal"]
 
-    query = result.get("query", "")
-    cands = result.get("candidates", [])
-
-    story.append(Paragraph("PharmaRep Master", title_style))
-    story.append(Paragraph("Drug Repurposing Research Report", normal))
-    story.append(Spacer(1, 0.2 * inch))
-
-    story.append(Paragraph(f"<b>Query:</b> {query}", normal))
     story.append(
-        Paragraph(f"<b>Generated:</b> {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}", normal)
+        Paragraph("PharmaRep Master — Drug Repurposing Report", title_style)
     )
-    story.append(Paragraph(f"<b>Total candidates:</b> {len(cands)}", normal))
-    story.append(Spacer(1, 0.2 * inch))
-
-    story.append(Paragraph("Top Candidates", header_style))
-    table_data = [["Drug", "Score", "Sources", "Mechanism", "Primary Disease"]]
-    for c in cands[:10]:
-        table_data.append(
-            [
-                c.get("drug", ""),
-                f"{c.get('final_score', 0.0):.3f}",
-                str(c.get("sources_count", 0)),
-                (c.get("mechanism") or "")[:40],
-                (c.get("diseases", ["N/A"])[0])[:30] if c.get("diseases") else "N/A",
-            ]
-        )
-
-    table = Table(
-        table_data,
-        colWidths=[1.5 * inch, 0.8 * inch, 0.8 * inch, 1.7 * inch, 1.5 * inch],
-    )
-    table.setStyle(
-        TableStyle(
-            [
-                ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1a6c80")),
-                ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
-                ("ALIGN", (0, 0), (-1, -1), "CENTER"),
-                ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-                ("FONTSIZE", (0, 0), (-1, 0), 10),
-                ("BOTTOMPADDING", (0, 0), (-1, 0), 10),
-                ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
-            ]
-        )
-    )
-    story.append(table)
     story.append(Spacer(1, 0.3 * inch))
 
-    story.append(Paragraph("Candidate Details", header_style))
-    for i, c in enumerate(cands[:5], 1):
+    story.append(Paragraph(f"<b>Query:</b> {query_text}", styles["Normal"]))
+    story.append(
+        Paragraph(
+            f"<b>Generated:</b> {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+            styles["Normal"],
+        )
+    )
+    story.append(Spacer(1, 0.3 * inch))
+
+    if not candidates:
+        story.append(Paragraph("No candidates found.", styles["Normal"]))
+    else:
         story.append(
             Paragraph(
-                f"<b>{i}. {c.get('drug', '')}</b> (score {c.get('final_score', 0.0):.3f})", normal
+                f"<b>Top {len(candidates)} Candidates</b>", styles["Heading2"]
             )
         )
-        story.append(
-            Paragraph(
-                f"<b>Mechanism:</b> {c.get('mechanism') or 'Not specified'}",
-                normal,
-            )
-        )
-        story.append(
-            Paragraph(
-                f"<b>Diseases:</b> {', '.join(c.get('diseases', [])) or 'N/A'}",
-                normal,
-            )
-        )
-        story.append(
-            Paragraph(
-                f"<b>Sources:</b> {', '.join(c.get('aggregated_meta', {}).get('sources', []))}",
-                normal,
-            )
-        )
-        for ev in c.get("evidence", [])[:3]:
+        story.append(Spacer(1, 0.2 * inch))
+
+        for i, c in enumerate(candidates[:10], 1):
             story.append(
                 Paragraph(
-                    f"- [{ev.get('source')}] {ev.get('snippet', '')[:200]}",
-                    normal,
+                    f"{i}. {c.get('drug', 'Unknown')}", styles["Heading3"]
                 )
             )
-        story.append(Spacer(1, 0.15 * inch))
-
-    story.append(PageBreak())
-    story.append(Paragraph("Methodology", header_style))
-    story.append(
-        Paragraph(
-            "This report is generated by PharmaRep Master, which runs multiple "
-            "AI agents in parallel over literature, trials, patents, and market "
-            "data and ranks candidate drugs using a deterministic scoring formula.",
-            normal,
-        )
-    )
-    story.append(Spacer(1, 0.2 * inch))
-    story.append(Paragraph("Limitations & Disclaimer", header_style))
-    story.append(
-        Paragraph(
-            "This is for research use only and is not medical or regulatory advice. "
-            "All findings must be validated by qualified experts.",
-            normal,
-        )
-    )
+            story.append(
+                Paragraph(
+                    f"<b>Score:</b> {c.get('final_score', 0.0):.3f}",
+                    styles["Normal"],
+                )
+            )
+            story.append(
+                Paragraph(
+                    f"<b>Mechanism:</b> {c.get('mechanism', 'N/A')}",
+                    styles["Normal"],
+                )
+            )
+            story.append(
+                Paragraph(
+                    f"<b>Diseases:</b> {', '.join(c.get('diseases', []))}",
+                    styles["Normal"],
+                )
+            )
+            story.append(
+                Paragraph(
+                    f"<b>Sources:</b> {c.get('sources_count', 0)}",
+                    styles["Normal"],
+                )
+            )
+            story.append(Spacer(1, 0.2 * inch))
 
     doc.build(story)
-    logger.info(f"PDF saved to {output_path}")
+    logger.info(f"PDF report saved to {pdf_path}")

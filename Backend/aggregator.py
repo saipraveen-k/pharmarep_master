@@ -1,99 +1,66 @@
-# backend/aggregator.py
-import logging
-import re
 from typing import Dict, List
-from collections import defaultdict
+import logging
 
 logger = logging.getLogger(__name__)
 
-
-def _norm(name: str) -> str:
-    s = (name or "").lower().strip()
-    return re.sub(r"[^\w\s]", "", s)
-
-
 def aggregate_and_score(worker_results: Dict[str, List[Dict]]) -> List[Dict]:
-    groups = defaultdict(lambda: {"hits": [], "sources": set()})
+    drug_map: Dict[str, Dict] = {}
+    source_weights = {
+        "clinical_trials": 0.4,
+        "papers": 0.3,
+        "patents": 0.15,
+        "market": 0.1,
+        "internal_docs": 0.05,
+    }
 
     for source, hits in worker_results.items():
-        for h in hits:
-            drug = (h.get("drug") or "").strip()
-            if not drug:
-                continue
-            key = _norm(drug)
-            groups[key]["hits"].append(h | {"source": source})
-            groups[key]["sources"].add(source)
+        weight = source_weights.get(source, 0.1)
+        for hit in hits:
+            drug = hit.get("drug", "Unknown")
+            if drug not in drug_map:
+                drug_map[drug] = {
+                    "drug": drug,
+                    "disease": hit.get("disease", ""),
+                    "mechanism": hit.get("mechanism", ""),
+                    "diseases": set(),
+                    "sources": set(),
+                    "confidence_sum": 0.0,
+                    "hit_count": 0,
+                    "evidence": [],
+                }
 
-    candidates: List[Dict] = []
-    for key, data in groups.items():
-        hits = data["hits"]
-        sources = data["sources"]
-        if not hits:
-            continue
+            drug_map[drug]["diseases"].add(hit.get("disease", ""))
+            drug_map[drug]["sources"].add(source)
+            drug_map[drug]["confidence_sum"] += hit.get("confidence", 0.5) * weight
+            drug_map[drug]["hit_count"] += 1
+            drug_map[drug]["evidence"].append(
+                {
+                    "source": source,
+                    "snippet": hit.get("evidence_snippet", ""),
+                    "source_url": hit.get("source_url"),
+                    "source_id": hit.get("source_id"),
+                }
+            )
 
-        det = _score(hits, sources)
-        evidence = [
-            {
-                "source": h["source"],
-                "source_id": h.get("source_id", ""),
-                "source_url": h.get("source_url"),
-                "snippet": h.get("evidence_snippet", ""),
-                "confidence": float(h.get("confidence", 0.5)),
-            }
-            for h in hits
-        ]
-        diseases = list({h.get("disease", "") for h in hits if h.get("disease")})
-        mechs = list({h.get("mechanism", "") for h in hits if h.get("mechanism")})
-        avg_conf = sum(float(h.get("confidence", 0.5)) for h in hits) / len(hits)
+    candidates = []
+    for drug, data in drug_map.items():
+        avg_confidence = data["confidence_sum"] / max(data["hit_count"], 1)
+        multi_source_bonus = 0.1 if len(data["sources"]) >= 2 else 0
+        deterministic_score = min(0.99, avg_confidence + multi_source_bonus)
 
         candidates.append(
             {
-                "drug": hits[0].get("drug", ""),
-                "deterministic_score": det,
-                "llm_score": None,
-                "final_score": det,
-                "sources_count": len(sources),
-                "evidence": evidence,
-                "mechanism": mechs[0] if mechs else "",
-                "diseases": diseases,
-                "average_confidence": avg_conf,
-                "aggregated_meta": {
-                    "sources": list(sources),
-                    "hit_count": len(hits),
-                    "diseases": diseases,
-                    "mechanisms": mechs,
-                },
+                "drug": drug,
+                "disease": data["disease"],
+                "mechanism": data["mechanism"],
+                "diseases": list(data["diseases"]),
+                "deterministic_score": deterministic_score,
+                "llm_score": deterministic_score,
+                "final_score": deterministic_score,
+                "sources_count": len(data["sources"]),
+                "evidence": data["evidence"],
             }
         )
 
-    candidates.sort(key=lambda c: c["deterministic_score"], reverse=True)
+    candidates.sort(key=lambda x: x["final_score"], reverse=True)
     return candidates
-
-
-def _score(hits: List[Dict], sources: set) -> float:
-    src_conf = defaultdict(list)
-    for h in hits:
-        src_conf[h["source"]].append(float(h.get("confidence", 0.5)))
-
-    # simple weights for demo
-    clinical = 0.0
-    if "clinical_trials" in src_conf:
-        mx = max(src_conf["clinical_trials"]) if src_conf["clinical_trials"] else 0.5
-        clinical = 0.5 * mx
-
-    papers = 0.0
-    if "papers" in src_conf and src_conf["papers"]:
-        papers = 0.3 * (sum(src_conf["papers"]) / len(src_conf["papers"]))
-
-    patents = 0.0
-    if "patents" in src_conf and src_conf["patents"]:
-        patents = 0.1 * max(src_conf["patents"])
-
-    market = 0.0
-    if "market" in src_conf and src_conf["market"]:
-        market = 0.1 * max(src_conf["market"])
-
-    base = clinical + papers + patents + market
-    bonus = 1.0 + 0.05 * max(0, len(sources) - 1)
-    final = base * bonus
-    return round(min(final, 1.0), 3)

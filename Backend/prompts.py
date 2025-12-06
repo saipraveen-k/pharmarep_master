@@ -1,5 +1,3 @@
-# backend/prompts.py
-
 MASTER_PLANNER_PROMPT = """
 SYSTEM: You are the Master Planner for PharmaRep Master. Output ONLY valid JSON.
 
@@ -8,57 +6,63 @@ Query: "{query_text}"
 MaxResults: {max_results}
 
 TASK:
-Return a JSON object:
-{
-  "query": "<same query>",
+Return a JSON object with subtasks. Each subtask has: name, description,
+fetch_instructions, worker_prompt, max_results, timeout_seconds.
+
+Return ONLY this JSON structure (no extra text):
+
+{{
+  "query": "{query_text}",
   "subtasks": [
-    {"name": "papers", "fetch_instructions": "", "worker_prompt": "", "max_results": 10, "timeout_seconds": 10},
-    {"name": "clinical_trials", "fetch_instructions": "", "worker_prompt": "", "max_results": 10, "timeout_seconds": 10},
-    {"name": "patents", "fetch_instructions": "", "worker_prompt": "", "max_results": 10, "timeout_seconds": 10},
-    {"name": "market", "fetch_instructions": "", "worker_prompt": "", "max_results": 10, "timeout_seconds": 10},
-    {"name": "internal_docs", "fetch_instructions": "", "worker_prompt": "", "max_results": 10, "timeout_seconds": 10}
+    {{"name": "papers", "description": "Search biomedical literature",
+      "fetch_instructions": "", "worker_prompt": "",
+      "max_results": {max_results}, "timeout_seconds": 10}},
+    {{"name": "clinical_trials", "description": "Search clinical trials",
+      "fetch_instructions": "", "worker_prompt": "",
+      "max_results": {max_results}, "timeout_seconds": 10}},
+    {{"name": "patents", "description": "Search patents",
+      "fetch_instructions": "", "worker_prompt": "",
+      "max_results": {max_results}, "timeout_seconds": 10}},
+    {{"name": "market", "description": "Search market data",
+      "fetch_instructions": "", "worker_prompt": "",
+      "max_results": {max_results}, "timeout_seconds": 10}},
+    {{"name": "internal_docs", "description": "Search internal docs",
+      "fetch_instructions": "", "worker_prompt": "",
+      "max_results": {max_results}, "timeout_seconds": 10}}
   ],
-  "postprocess_instructions": "Use deterministic scoring + multi-source bonus.",
-  "output_format": "JSON with query, candidates[], scores, evidence."
-}
+  "postprocess_instructions": "Use deterministic multi-source scoring",
+  "output_format": "JSON with candidates"
+}}
 """
 
 WORKER_EXTRACTION_PROMPT = """
-SYSTEM: You are a biomedical extraction assistant. Output JSON only (array).
-
-Given the text, extract drug repurposing signals:
-[
-  {
-    "drug": "<drug name>",
-    "disease": "<disease/condition>",
-    "mechanism": "<mechanism or ''>",
-    "evidence_snippet": "<snippet up to 200 chars>",
-    "confidence": 0.0-1.0,
-    "source_url": "<url or null>",
-    "source_id": "<id or 'mock'>",
-    "notes": "<optional>"
-  }
-]
-
-If no drugs, return [].
+You are a biomedical extraction assistant. Extract drug mentions from text.
 
 TEXT:
-<<TEXT>>
 {raw_text}
-<<END_TEXT>>
+
+Return ONLY a JSON array with objects:
+drug, disease, mechanism, evidence_snippet, confidence,
+source_url, source_id, notes.
+
+If no drugs found, return: []
+
+Example:
+[{{"drug": "Memantine", "disease": "Alzheimer's disease",
+   "mechanism": "NMDA antagonist", "evidence_snippet": "...",
+   "confidence": 0.85, "source_url": null,
+   "source_id": "PMID123", "notes": ""}}]
 """
 
 LLM_RANKING_PROMPT = """
-SYSTEM: You are a ranking assistant. Output ONLY a JSON array.
+You are a ranking assistant. Re-score these candidates.
 
 INPUT:
 {candidates_json}
 
-TASK:
-For each candidate output:
-{"candidate": "<drug>", "llm_score": 0.0-1.0, "justification": "one line"}
+Return ONLY a JSON array with: candidate, llm_score, justification.
 
-Rules:
-- Start from deterministic_score, adjust max ±0.2.
-- Return only JSON array.
+Example:
+[{{"candidate": "Memantine", "llm_score": 0.92,
+   "justification": "Strong evidence"}}]
 """

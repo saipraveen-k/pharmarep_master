@@ -1,27 +1,19 @@
-# backend/main.py
-from fastapi import FastAPI, File, UploadFile, BackgroundTasks, HTTPException
-from fastapi.responses import FileResponse
+import asyncio
+import logging
+import os
+import uuid
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from typing import Optional, Dict
-from datetime import datetime
-import uuid
-import os
-import logging
-
-from db import init_db, save_query, save_result, get_candidates_by_query_id
+from dotenv import load_dotenv
 from orchestrator import run_orchestration
-from pdf_gen import generate_pdf_report
+from db import init_db, save_result, get_candidates
 
+load_dotenv()
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-app = FastAPI(
-    title="PharmaRep Master API",
-    description="Agentic AI for Rapid Drug Repurposing",
-    version="1.0.0",
-)
-
+app = FastAPI()
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -31,150 +23,78 @@ app.add_middleware(
 )
 
 init_db()
+active_queries: dict = {}
 
-
-class StartQueryRequest(BaseModel):
+class QueryRequest(BaseModel):
     query: str
     max_results: int = 10
     include_internal_docs: bool = False
 
-
-class QueryStatus(BaseModel):
-    query_id: str
-    status: str
-    progress_percent: int
-    worker_status: Dict[str, str]
-    error_message: Optional[str]
-    timestamp: str
-
-
-query_status_store: Dict[str, Dict] = {}
-
-
-@app.get("/")
-async def root():
-    return {"app": "PharmaRep Master", "version": "1.0.0"}
-
-
 @app.get("/api/health")
 async def health():
-    return {"status": "healthy", "timestamp": datetime.utcnow().isoformat()}
-
+    return {"status": "healthy"}
 
 @app.post("/api/start_query")
-async def start_query(req: StartQueryRequest, background_tasks: BackgroundTasks):
+async def start_query(req: QueryRequest):
     query_id = str(uuid.uuid4())
-    save_query(query_id, req.query, req.max_results)
+    active_queries[query_id] = {"status": "running", "progress": 0}
 
-    query_status_store[query_id] = {
-        "status": "running",
-        "progress_percent": 0,
-        "worker_status": {
-            "papers": "pending",
-            "clinical_trials": "pending",
-            "patents": "pending",
-            "market": "pending",
-            "internal_docs": "pending",
-        },
-        "error_message": None,
-        "timestamp": datetime.utcnow().isoformat(),
-    }
+    def update_status(progress: int, details: dict):
+        if query_id in active_queries:
+            active_queries[query_id]["progress"] = progress
+            active_queries[query_id]["details"] = details
 
-    background_tasks.add_task(
-        run_orchestration_task, query_id=query_id, query_text=req.query, max_results=req.max_results
+    asyncio.create_task(
+        run_orchestration_task(query_id, req.query, req.max_results, update_status)
     )
+    return {"query_id": query_id}
 
-    return {
-        "query_id": query_id,
-        "status": "running",
-        "message": "Search started. Poll /api/status/{query_id}.",
-    }
-
+async def run_orchestration_task(
+    query_id: str, query_text: str, max_results: int, status_callback
+):
+    try:
+        result = await run_orchestration(
+            query_id, query_text, max_results, status_callback
+        )
+        save_result(query_id, result)
+        if query_id in active_queries:
+            active_queries[query_id]["status"] = "completed"
+            active_queries[query_id]["progress"] = 100
+    except Exception as e:
+        logger.error(f"Orchestration failed: {e}")
+        if query_id in active_queries:
+            active_queries[query_id]["status"] = "failed"
+            active_queries[query_id]["error_message"] = str(e)
 
 @app.get("/api/status/{query_id}")
 async def get_status(query_id: str):
-    if query_id not in query_status_store:
+    if query_id not in active_queries:
         raise HTTPException(status_code=404, detail="Query not found")
-    s = query_status_store[query_id]
-    return QueryStatus(
-        query_id=query_id,
-        status=s["status"],
-        progress_percent=s["progress_percent"],
-        worker_status=s["worker_status"],
-        error_message=s["error_message"],
-        timestamp=s["timestamp"],
-    )
-
-
-@app.get("/api/candidates/{query_id}")
-async def get_candidates(query_id: str):
-    if query_id not in query_status_store or query_status_store[query_id]["status"] != "completed":
-        raise HTTPException(status_code=400, detail="Query not completed yet")
+    q = active_queries[query_id]
     return {
         "query_id": query_id,
-        "candidates": get_candidates_by_query_id(query_id),
+        "status": q.get("status", "unknown"),
+        "progress_percent": q.get("progress", 0),
+        "error_message": q.get("error_message"),
     }
 
+@app.get("/api/candidates/{query_id}")
+async def get_candidates_endpoint(query_id: str):
+    candidates = get_candidates(query_id)
+    return {"query_id": query_id, "candidates": candidates}
 
 @app.get("/api/report/{query_id}")
 async def get_report(query_id: str):
-    if query_id not in query_status_store or query_status_store[query_id]["status"] != "completed":
-        raise HTTPException(status_code=400, detail="Query not completed yet")
+    from fastapi.responses import FileResponse
 
-    reports_dir = os.getenv("REPORTS_DIR", "./reports")
-    pdf_path = os.path.join(reports_dir, f"{query_id}.pdf")
+    pdf_path = f"./reports/{query_id}.pdf"
     if not os.path.exists(pdf_path):
-        raise HTTPException(status_code=404, detail="Report not ready")
-
+        raise HTTPException(status_code=404, detail="Report not found")
     return FileResponse(
-        pdf_path,
-        media_type="application/pdf",
-        filename=f"pharmarep_{query_id}.pdf",
+        pdf_path, media_type="application/pdf", filename=f"{query_id}.pdf"
     )
-
-
-@app.post("/api/upload_docs")
-async def upload_docs(file: UploadFile = File(...)):
-    # Stored but not used by internal_docs worker in this MVP
-    upload_dir = "./uploads"
-    os.makedirs(upload_dir, exist_ok=True)
-    out_path = os.path.join(upload_dir, file.filename)
-    with open(out_path, "wb") as f:
-        f.write(await file.read())
-    return {"status": "uploaded", "file_name": file.filename}
-
-
-async def run_orchestration_task(query_id: str, query_text: str, max_results: int):
-    try:
-        def status_cb(pct: int, ws: Dict[str, str]):
-            if query_id in query_status_store:
-                query_status_store[query_id]["progress_percent"] = pct
-                query_status_store[query_id]["worker_status"] = ws
-                query_status_store[query_id]["timestamp"] = datetime.utcnow().isoformat()
-
-        result = await run_orchestration(
-            query_id=query_id,
-            query_text=query_text,
-            max_results=max_results,
-            status_callback=status_cb,
-        )
-
-        reports_dir = os.getenv("REPORTS_DIR", "./reports")
-        os.makedirs(reports_dir, exist_ok=True)
-        pdf_path = os.path.join(reports_dir, f"{query_id}.pdf")
-        generate_pdf_report(result, pdf_path)
-
-        save_result(query_id, result)
-
-        query_status_store[query_id]["status"] = "completed"
-        query_status_store[query_id]["progress_percent"] = 100
-    except Exception as e:
-        logger.exception(f"Orchestration failed: {e}")
-        query_status_store[query_id]["status"] = "failed"
-        query_status_store[query_id]["error_message"] = str(e)
-
 
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", 8000)), reload=True)
+    uvicorn.run(app, host="0.0.0.0", port=8000)
