@@ -3,14 +3,9 @@ uvicorn[standard]
 streamlit
 aiohttp
 requests
-
 openai
-
 python-dotenv
 pydantic
-
 reportlab
-
 pytest
-
 python-multipart

@@ -1,8 +1,10 @@
 import pytest
+
 from backend.orchestrator import run_orchestration
 
+
 @pytest.mark.asyncio
-async def test_run_orchestration_smoke():
+async def test_orchestrator_smoke():
     async def cb(pct, ws):
         pass
 

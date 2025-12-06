@@ -1,25 +1,24 @@
 import asyncio
 import json
 import logging
+import os
 from abc import ABC, abstractmethod
 from typing import List, Dict
 
 import openai
-from ..prompts import WORKER_EXTRACTION_PROMPT
+from prompts import WORKER_EXTRACTION_PROMPT
 
 logger = logging.getLogger(__name__)
+
 
 class WorkerBase(ABC):
     def __init__(self, timeout: int = 25):
         self.timeout = timeout
-        openai.api_key = None  # read from env in orchestrator
+        openai.api_key = os.getenv("OPENAI_API_KEY")
 
     @abstractmethod
     async def fetch_raw_items(
-        self,
-        query_text: str,
-        instructions: str,
-        max_results: int,
+        self, query_text: str, instructions: str, max_results: int
     ) -> List[Dict]:
         ...
 
@@ -28,10 +27,10 @@ class WorkerBase(ABC):
             return []
         prompt = WORKER_EXTRACTION_PROMPT.format(raw_text=raw_text)
         resp = openai.ChatCompletion.create(
-            model="gpt-4",
+            model=os.getenv("OPENAI_MODEL_WORKER", "gpt-4.1-mini"),
             messages=[{"role": "user", "content": prompt}],
             temperature=0,
-            max_tokens=1000,
+            max_tokens=800,
         )
         text = resp.choices[0].message.content.strip()
         try:
@@ -48,7 +47,7 @@ class WorkerBase(ABC):
             raw_items = await self.fetch_raw_items(
                 query_text,
                 subtask.get("fetch_instructions", ""),
-                subtask.get("max_results", 20),
+                subtask.get("max_results", 10),
             )
         except Exception as e:
             logger.error(f"fetch_raw_items error: {e}")
@@ -64,7 +63,7 @@ class WorkerBase(ABC):
                 for h in hits:
                     h["source"] = subtask["name"]
                     h["source_url"] = h.get("source_url") or item.get("url")
-                    h["source_id"] = h.get("source_id") or item.get("source_id", "")
+                    h["source_id"] = h.get("source_id") or item.get("source_id", "mock")
                 all_hits.extend(hits)
             except Exception as e:
                 logger.error(f"Extraction failed for item {item.get('source_id')}: {e}")

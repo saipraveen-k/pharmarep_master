@@ -1,12 +1,13 @@
+# backend/db.py
 import sqlite3
 import json
-import logging
 import os
-from typing import List, Dict, Optional
+import logging
+from typing import List, Dict
 
 logger = logging.getLogger(__name__)
-
 DB_PATH = os.getenv("DB_PATH", "./pharmarep.db")
+
 
 def init_db():
     conn = sqlite3.connect(DB_PATH)
@@ -35,8 +36,7 @@ def init_db():
             source_url TEXT,
             source_id TEXT,
             notes TEXT,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (query_id) REFERENCES queries(query_id)
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
 
@@ -53,8 +53,7 @@ def init_db():
             evidence_json TEXT,
             aggregated_meta_json TEXT,
             human_review_flag INTEGER DEFAULT 0,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (query_id) REFERENCES queries(query_id)
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
 
@@ -64,27 +63,14 @@ def init_db():
             query_id TEXT NOT NULL UNIQUE,
             result_json TEXT NOT NULL,
             pdf_path TEXT,
-            generated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (query_id) REFERENCES queries(query_id)
-        )
-    """)
-
-    c.execute("""
-        CREATE TABLE IF NOT EXISTS human_reviews (
-            review_id INTEGER PRIMARY KEY AUTOINCREMENT,
-            query_id TEXT NOT NULL,
-            candidate_id INTEGER,
-            drug TEXT NOT NULL,
-            review_status TEXT DEFAULT 'pending',
-            reviewer_notes TEXT,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (query_id) REFERENCES queries(query_id)
+            generated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
 
     conn.commit()
     conn.close()
-    logger.info(f"Database initialized at {DB_PATH}")
+    logger.info(f"DB initialized at {DB_PATH}")
+
 
 def save_query(query_id: str, query_text: str, max_results: int):
     conn = sqlite3.connect(DB_PATH)
@@ -95,6 +81,7 @@ def save_query(query_id: str, query_text: str, max_results: int):
     )
     conn.commit()
     conn.close()
+
 
 def save_hits(query_id: str, hits: List[Dict]):
     conn = sqlite3.connect(DB_PATH)
@@ -123,10 +110,11 @@ def save_hits(query_id: str, hits: List[Dict]):
     conn.commit()
     conn.close()
 
-def save_candidates(query_id: str, candidates: List[Dict]):
+
+def save_candidates(query_id: str, cands: List[Dict]):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    for cand in candidates:
+    for cand in cands:
         c.execute(
             """
             INSERT INTO candidates
@@ -136,11 +124,11 @@ def save_candidates(query_id: str, candidates: List[Dict]):
             """,
             (
                 query_id,
-                cand.get("drug", ""),
-                cand.get("deterministic_score", 0.0),
+                cand["drug"],
+                cand["deterministic_score"],
                 cand.get("llm_score"),
-                cand.get("final_score", 0.0),
-                cand.get("sources_count", 0),
+                cand["final_score"],
+                cand["sources_count"],
                 cand.get("mechanism", ""),
                 json.dumps(cand.get("evidence", [])),
                 json.dumps(cand.get("aggregated_meta", {})),
@@ -148,6 +136,7 @@ def save_candidates(query_id: str, candidates: List[Dict]):
         )
     conn.commit()
     conn.close()
+
 
 def save_result(query_id: str, result: Dict):
     all_hits = []
@@ -160,11 +149,12 @@ def save_result(query_id: str, result: Dict):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute(
-        "INSERT OR REPLACE INTO results (query_id, result_json) VALUES (?, ?)",
-        (query_id, json.dumps(result)),
+        "INSERT OR REPLACE INTO results (query_id, result_json, pdf_path) VALUES (?, ?, ?)",
+        (query_id, json.dumps(result), ""),
     )
     conn.commit()
     conn.close()
+
 
 def get_candidates_by_query_id(query_id: str) -> List[Dict]:
     conn = sqlite3.connect(DB_PATH)
