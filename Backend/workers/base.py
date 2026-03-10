@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import os
+import random
 from abc import ABC, abstractmethod
 from typing import List, Dict, Optional
 
@@ -33,32 +34,55 @@ class WorkerBase(ABC):
     async def _extract(self, raw_text: str, worker_prompt: str) -> List[Dict]:
         """
         Call LLM to extract structured drug evidence from raw_text.
+        For testing, return mock data to avoid API quota issues.
         """
         if not raw_text.strip():
             return []
 
-        prompt = WORKER_EXTRACTION_PROMPT.format(raw_text=raw_text)
-
-        try:
-            resp = client.chat.completions.create(
-                model=os.getenv("OPENAI_MODEL_WORKER", "gpt-4o-mini"),
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0,
-                max_tokens=800,
-            )
-            text = resp.choices[0].message.content.strip()
-            logger.info(f"Worker extraction LLM response: {text[:500]!r}")
-        except Exception as e:
-            logger.error(f"Worker LLM API call failed: {e}")
-            return []
-
-        hits = self._safe_json_parse(text)
-        if hits is not None and len(hits) > 0:
-            logger.info(f"Successfully extracted {len(hits)} hits")
-            return hits
-
-        logger.warning(f"No valid JSON hits extracted from: {text[:300]!r}")
-        return []
+        # MOCK DATA - Returns realistic candidates instantly
+        # Remove this section when your OpenAI API quota is set up
+        drugs = [
+            "Memantine", 
+            "Donepezil", 
+            "Rivastigmine", 
+            "Galantamine", 
+            "Lecanemab",
+            "Aducanumab",
+            "Tacrine",
+            "Physostigmine"
+        ]
+        diseases = [
+            "Alzheimer's disease", 
+            "Dementia", 
+            "Cognitive Impairment", 
+            "Neurodegeneration",
+            "Mild Cognitive Decline",
+            "Age-related Memory Loss"
+        ]
+        mechanisms = [
+            "Acetylcholinesterase inhibitor", 
+            "NMDA antagonist", 
+            "Amyloid inhibitor", 
+            "Receptor modulator",
+            "Tau protein inhibitor",
+            "Neuroinflammation reducer"
+        ]
+        
+        mock_hits = []
+        num_drugs = random.randint(2, 4)
+        
+        for _ in range(num_drugs):
+            mock_hits.append({
+                "drug": random.choice(drugs),
+                "disease": random.choice(diseases),
+                "mechanism": random.choice(mechanisms),
+                "evidence_snippet": f"Clinical studies demonstrate effectiveness. Multiple phase trials show positive outcomes. Evidence supports repurposing.",
+                "confidence": round(random.uniform(0.75, 0.98), 2),
+                "source_url": "https://pubmed.ncbi.nlm.nih.gov/example/",
+                "source_id": f"PMID{random.randint(1000000, 9999999)}",
+            })
+        
+        return mock_hits
 
     def _safe_json_parse(self, text: str) -> Optional[List[Dict]]:
         """

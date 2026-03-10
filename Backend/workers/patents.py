@@ -23,3 +23,4 @@ class PatentsWorker(WorkerBase):
                 }
             )
         return items
+    

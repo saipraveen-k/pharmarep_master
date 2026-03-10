@@ -4,9 +4,7 @@ import logging
 import os
 from datetime import datetime
 from typing import Dict, List, Callable
-
 from openai import OpenAI
-
 from prompts import MASTER_PLANNER_PROMPT
 from aggregator import aggregate_and_score
 from ranking import llm_rerank_candidates
@@ -34,9 +32,7 @@ class MasterOrchestrator:
         }
 
     async def plan_query(self, query_text: str, max_results: int) -> Dict:
-        prompt = MASTER_PLANNER_PROMPT.format(
-            query_text=query_text, max_results=max_results
-        )
+        prompt = MASTER_PLANNER_PROMPT.format(query_text=query_text, max_results=max_results)
         try:
             resp = client.chat.completions.create(
                 model=os.getenv("OPENAI_MODEL_PLANNER", "gpt-4o-mini"),
@@ -55,41 +51,11 @@ class MasterOrchestrator:
             return {
                 "query": query_text,
                 "subtasks": [
-                    {
-                        "name": "papers",
-                        "fetch_instructions": "",
-                        "worker_prompt": "",
-                        "max_results": max_results,
-                        "timeout_seconds": 10,
-                    },
-                    {
-                        "name": "clinical_trials",
-                        "fetch_instructions": "",
-                        "worker_prompt": "",
-                        "max_results": max_results,
-                        "timeout_seconds": 10,
-                    },
-                    {
-                        "name": "patents",
-                        "fetch_instructions": "",
-                        "worker_prompt": "",
-                        "max_results": max_results,
-                        "timeout_seconds": 10,
-                    },
-                    {
-                        "name": "market",
-                        "fetch_instructions": "",
-                        "worker_prompt": "",
-                        "max_results": max_results,
-                        "timeout_seconds": 10,
-                    },
-                    {
-                        "name": "internal_docs",
-                        "fetch_instructions": "",
-                        "worker_prompt": "",
-                        "max_results": max_results,
-                        "timeout_seconds": 10,
-                    },
+                    {"name": "papers", "fetch_instructions": "", "worker_prompt": "", "max_results": max_results, "timeout_seconds": 10},
+                    {"name": "clinical_trials", "fetch_instructions": "", "worker_prompt": "", "max_results": max_results, "timeout_seconds": 10},
+                    {"name": "patents", "fetch_instructions": "", "worker_prompt": "", "max_results": max_results, "timeout_seconds": 10},
+                    {"name": "market", "fetch_instructions": "", "worker_prompt": "", "max_results": max_results, "timeout_seconds": 10},
+                    {"name": "internal_docs", "fetch_instructions": "", "worker_prompt": "", "max_results": max_results, "timeout_seconds": 10},
                 ],
                 "postprocess_instructions": "",
                 "output_format": "",
@@ -99,24 +65,22 @@ class MasterOrchestrator:
         subtasks_by_name = {st["name"]: st for st in plan.get("subtasks", [])}
         tasks: Dict[str, asyncio.Task] = {}
         self.status_callback(30, {name: "running" for name in self.workers.keys()})
-
+        
         for name, worker in self.workers.items():
             subtask = subtasks_by_name.get(name)
             if not subtask:
                 continue
             tasks[name] = asyncio.create_task(worker.execute(query_text, subtask))
-
+        
         results: Dict[str, List[Dict]] = {}
         for name, task in tasks.items():
             try:
-                hits = await asyncio.wait_for(
-                    task, timeout=self.worker_timeout + 5
-                )
+                hits = await asyncio.wait_for(task, timeout=self.worker_timeout + 5)
                 results[name] = hits
             except Exception as e:
                 logger.error(f"Worker {name} failed: {e}")
                 results[name] = []
-
+        
         self.status_callback(60, {name: "done" for name in self.workers.keys()})
         return results
 
@@ -124,17 +88,18 @@ class MasterOrchestrator:
         plan = await self.plan_query(query_text, max_results)
         worker_results = await self.run_workers(plan, query_text)
         self.status_callback(75, {n: "aggregating" for n in self.workers.keys()})
-
+        
         aggregated = aggregate_and_score(worker_results)
         self.status_callback(90, {n: "ranking" for n in self.workers.keys()})
-
+        
         ranked = await llm_rerank_candidates(aggregated)
         self.status_callback(95, {n: "generating_pdf" for n in self.workers.keys()})
-
+        
         from pdf_gen import generate_report
-
         generate_report(query_id, query_text, ranked)
-
+        
+        self.status_callback(100, {n: "complete" for n in self.workers.keys()})
+        
         return {
             "query_id": query_id,
             "query": query_text,

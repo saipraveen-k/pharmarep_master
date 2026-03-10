@@ -2,7 +2,6 @@ from typing import List, Dict
 import json
 import os
 import logging
-
 from openai import OpenAI
 from prompts import LLM_RANKING_PROMPT
 
@@ -35,13 +34,15 @@ async def llm_rerank_candidates(candidates: List[Dict]) -> List[Dict]:
         ranking = json.loads(ranking_text)
     except Exception as e:
         logger.warning(f"Ranking LLM failed: {e}. Using deterministic scores only.")
+        # FALLBACK: Use mock ranking when API fails
         for c in candidates:
             c["llm_score"] = c.get("deterministic_score", 0.0)
             c["final_score"] = c.get("deterministic_score", 0.0)
+            c["ranking_justification"] = "Mock ranking - API unavailable"
         candidates.sort(key=lambda x: x.get("final_score", 0.0), reverse=True)
         return candidates
 
-    ranking_map = {r["candidate"]: r for r in ranking}
+    ranking_map = {r.get("candidate", r.get("drug", "")): r for r in ranking}
 
     for c in candidates:
         name = c.get("drug")

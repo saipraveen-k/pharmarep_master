@@ -447,4 +447,3 @@ Built for **EY Techathon** by a student team passionate about accelerating pharm
 
 ---
 
-*PharmaRep Master v1.0 | Built with ❤️ for accelerating pharmaceutical innovation*

@@ -1,19 +1,36 @@
+#!/usr/bin/env python3
+"""
+PharmaRep Master - Backend Server (FastAPI)
+Handles orchestration, worker coordination, and result persistence.
+Run: uvicorn main:app --reload --port 8000
+"""
+
 import asyncio
 import logging
-import os
 import uuid
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
-from dotenv import load_dotenv
-from orchestrator import run_orchestration
-from db import init_db, save_result, get_candidates
+from typing import Dict, List
+import os
+import os.path
 
-load_dotenv()
-logging.basicConfig(level=logging.INFO)
+# Import components
+from db import init_db, save_result, get_candidates
+from orchestrator import run_orchestration
+
+# Initialize logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
 logger = logging.getLogger(__name__)
 
-app = FastAPI()
+# Initialize FastAPI
+app = FastAPI(title="PharmaRep Master API")
+
+# CORS middleware
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -22,79 +39,147 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-init_db()
-active_queries: dict = {}
+# Initialize database
+@app.on_event("startup")
+async def startup():
+    init_db()
+    logger.info("✅ Database initialized")
 
+# Request/Response models
 class QueryRequest(BaseModel):
-    query: str
-    max_results: int = 10
-    include_internal_docs: bool = False
+    query_text: str
+    max_results: int = 5
 
-@app.get("/api/health")
-async def health():
-    return {"status": "healthy"}
+class QueryResponse(BaseModel):
+    query_id: str
+    query_text: str
+    status: str
+    message: str
 
-@app.post("/api/start_query")
-async def start_query(req: QueryRequest):
-    query_id = str(uuid.uuid4())
-    active_queries[query_id] = {"status": "running", "progress": 0}
+class StatusResponse(BaseModel):
+    query_id: str
+    progress: int
+    status: Dict[str, str]
+    completed: bool
 
-    def update_status(progress: int, details: dict):
-        if query_id in active_queries:
-            active_queries[query_id]["progress"] = progress
-            active_queries[query_id]["details"] = details
+# Global state for tracking queries
+query_states: Dict[str, Dict] = {}
+query_results: Dict[str, Dict] = {}
 
-    asyncio.create_task(
-        run_orchestration_task(query_id, req.query, req.max_results, update_status)
-    )
-    return {"query_id": query_id}
-
-async def run_orchestration_task(
-    query_id: str, query_text: str, max_results: int, status_callback
-):
-    try:
-        result = await run_orchestration(
-            query_id, query_text, max_results, status_callback
-        )
-        save_result(query_id, result)
-        if query_id in active_queries:
-            active_queries[query_id]["status"] = "completed"
-            active_queries[query_id]["progress"] = 100
-    except Exception as e:
-        logger.error(f"Orchestration failed: {e}")
-        if query_id in active_queries:
-            active_queries[query_id]["status"] = "failed"
-            active_queries[query_id]["error_message"] = str(e)
-
-@app.get("/api/status/{query_id}")
-async def get_status(query_id: str):
-    if query_id not in active_queries:
-        raise HTTPException(status_code=404, detail="Query not found")
-    q = active_queries[query_id]
-    return {
-        "query_id": query_id,
-        "status": q.get("status", "unknown"),
-        "progress_percent": q.get("progress", 0),
-        "error_message": q.get("error_message"),
+def update_status(query_id: str, progress: int, status: Dict[str, str]):
+    """Callback for orchestrator to update progress"""
+    query_states[query_id] = {
+        "progress": progress,
+        "status": status,
+        "completed": progress >= 100
     }
+    logger.info(f"Query {query_id}: {progress}% - {status}")
+
+@app.post("/api/query", response_model=QueryResponse)
+async def create_query(request: QueryRequest):
+    """Start a new query"""
+    query_id = str(uuid.uuid4())
+    
+    # Initialize state
+    query_states[query_id] = {
+        "progress": 0,
+        "status": {"stage": "initializing"},
+        "completed": False
+    }
+    
+    logger.info(f"🔍 New query: {query_id} - {request.query_text}")
+    
+    # Run orchestration in background
+    async def run_query():
+        try:
+            result = await run_orchestration(
+                query_id=query_id,
+                query_text=request.query_text,
+                max_results=request.max_results,
+                status_callback=lambda progress, status: update_status(query_id, progress, status)
+            )
+            query_results[query_id] = result
+            save_result(query_id, result)
+            logger.info(f"✅ Query {query_id} completed")
+            
+            query_states[query_id]["progress"] = 100
+            query_states[query_id]["completed"] = True
+            query_states[query_id]["status"]["stage"] = "completed"
+        except Exception as e:
+            logger.error(f"❌ Query {query_id} failed: {e}")
+            query_states[query_id]["status"]["error"] = str(e)
+            query_states[query_id]["completed"] = True
+    
+    asyncio.create_task(run_query())
+    
+    return QueryResponse(
+        query_id=query_id,
+        query_text=request.query_text,
+        status="processing",
+        message="Query started"
+    )
+
+@app.get("/api/status/{query_id}", response_model=StatusResponse)
+async def get_status(query_id: str):
+    """Get query status"""
+    if query_id not in query_states:
+        raise HTTPException(status_code=404, detail="Query not found")
+    
+    state = query_states[query_id]
+    return StatusResponse(
+        query_id=query_id,
+        progress=state["progress"],
+        status=state["status"],
+        completed=state["completed"]
+    )
 
 @app.get("/api/candidates/{query_id}")
-async def get_candidates_endpoint(query_id: str):
-    candidates = get_candidates(query_id)
-    return {"query_id": query_id, "candidates": candidates}
+async def get_query_candidates(query_id: str):
+    """Get candidates for a query"""
+    if query_id not in query_results:
+        # Try to get from DB
+        candidates = get_candidates(query_id)
+        if not candidates:
+            raise HTTPException(status_code=404, detail="No candidates found")
+        return {
+            "query_id": query_id,
+            "candidates": candidates,
+            "count": len(candidates)
+        }
+    
+    result = query_results[query_id]
+    candidates = result.get("candidates", [])
+    
+    return {
+        "query_id": query_id,
+        "candidates": candidates,
+        "count": len(candidates),
+        "timestamp": result.get("timestamp")
+    }
 
 @app.get("/api/report/{query_id}")
 async def get_report(query_id: str):
-    from fastapi.responses import FileResponse
-
+    """Download PDF report for a query"""
     pdf_path = f"./reports/{query_id}.pdf"
+    
     if not os.path.exists(pdf_path):
-        raise HTTPException(status_code=404, detail="Report not found")
+        raise HTTPException(status_code=404, detail=f"PDF report not found: {pdf_path}")
+    
     return FileResponse(
-        pdf_path, media_type="application/pdf", filename=f"{query_id}.pdf"
+        pdf_path,
+        media_type="application/pdf",
+        filename=f"pharmarep_report_{query_id[:8]}.pdf"
     )
+
+@app.get("/api/health")
+async def health():
+    """Health check"""
+    return {
+        "status": "ok",
+        "service": "PharmaRep Master API",
+        "version": "1.0"
+    }
 
 if __name__ == "__main__":
     import uvicorn
-
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host="0.0.0.0", port=8000) 
