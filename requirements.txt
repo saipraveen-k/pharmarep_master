@@ -1,0 +1,6 @@
+# Backend + frontend dependencies (pinned in backend/requirements.txt)
+-r backend/requirements.txt
+
+# Tests
+pytest
+pytest-asyncio
