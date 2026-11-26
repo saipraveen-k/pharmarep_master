@@ -96,7 +96,7 @@ with col1:
                 st.success(f"✅ Query started: {data['query_id'][:8]}")
             except requests.exceptions.RequestException as e:
                 st.error(f"❌ API Error: {str(e)}")
-                st.info("Make sure backend is running: `cd Backend && python main.py`")
+                st.info("Make sure backend is running: `cd backend && python main.py`")
 
 with col2:
     st.subheader("📊 Pipeline Progress")

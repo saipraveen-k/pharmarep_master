@@ -10,3 +10,9 @@ venv/
 build/
 .next/
 !.env.example
+
+# Generated at runtime
+*.db
+reports/
+**/reports/*.pdf
+__pycache__/
